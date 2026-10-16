@@ -1,19 +1,21 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from git_janitor.analysis import classify
 from git_janitor.models import Status, WorktreeEntry, WorktreeFacts
 
+LINKED = WorktreeEntry(
+    path=Path("/repo/app-FP-1"),
+    head="abc123",
+    branch="feature/FP-1",
+    is_main=False,
+)
 
-def entry(**overrides: object) -> WorktreeEntry:
-    fields: dict[str, object] = {
-        "path": Path("/repo/app-FP-1"),
-        "head": "abc123",
-        "branch": "feature/FP-1",
-        "is_main": False,
-    }
-    fields.update(overrides)
-    return WorktreeEntry(**fields)  # type: ignore[arg-type]
+
+def entry(**overrides: Any) -> WorktreeEntry:
+    return replace(LINKED, **overrides)
 
 
 def facts(worktree: WorktreeEntry, exists: bool = True, changed_files: int = 0) -> WorktreeFacts:

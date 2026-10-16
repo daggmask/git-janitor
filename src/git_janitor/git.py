@@ -13,8 +13,7 @@ class GitError(Exception):
         self.stderr = stderr
 
 
-def _git_env() -> dict[str, str]:
-    # a scan must never take index.lock in someone's working tree
+def _env_without_optional_locks() -> dict[str, str]:
     return {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
 
 
@@ -24,7 +23,7 @@ def run_git(args: list[str], cwd: Path) -> str:
         cwd=cwd,
         capture_output=True,
         encoding="utf-8",
-        env=_git_env(),
+        env=_env_without_optional_locks(),
         check=False,
     )
     if result.returncode != 0:

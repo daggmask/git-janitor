@@ -11,7 +11,11 @@ from git_janitor.git import GitError
 from git_janitor.models import Status, Verdict
 from git_janitor.scan import scan as run_scan
 
-app = typer.Typer(no_args_is_help=True, add_completion=False)
+app = typer.Typer(
+    help="Find old git worktrees and clones and clean them up safely.",
+    no_args_is_help=True,
+    add_completion=False,
+)
 
 CWD = Path(".")
 STATUS_STYLE = {Status.ZOMBIE: "magenta", Status.SAFE: "green", Status.KEEP: "yellow"}
@@ -29,15 +33,14 @@ def main(
         bool, typer.Option("--version", callback=_show_version, is_eager=True)
     ] = False,
 ) -> None:
-    """Find old git worktrees and clones and clean them up safely."""
+    pass
 
 
-@app.command()
+@app.command(help="List worktrees under ROOT and say which are safe to delete. Deletes nothing.")
 def scan(
     root: Annotated[Path, typer.Argument(exists=True, file_okay=False, resolve_path=True)] = CWD,
     max_depth: Annotated[int, typer.Option(min=0, help="How deep to look for repositories.")] = 3,
 ) -> None:
-    """List worktrees under ROOT and say which are safe to delete. Deletes nothing."""
     try:
         verdicts = run_scan(root, max_depth)
     except GitError as error:

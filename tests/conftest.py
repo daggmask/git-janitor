@@ -29,6 +29,12 @@ def commit_file(repo: Path, name: str, content: str = "x\n") -> None:
     git(repo, "commit", "-q", "-m", f"add {name}")
 
 
+def add_worktree(repo: Path, name: str) -> Path:
+    path = repo.parent / name
+    git(repo, "worktree", "add", "-q", "-b", name, str(path), "origin/main")
+    return path
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     path = tmp_path / "app"
@@ -36,3 +42,13 @@ def repo(tmp_path: Path) -> Path:
     git(path, "init", "-q", "-b", "main")
     commit_file(path, "README.md")
     return path
+
+
+@pytest.fixture
+def pushed(repo: Path) -> Path:
+    remote = repo.parent / "remote.git"
+    git(repo.parent, "init", "-q", "--bare", "-b", "main", str(remote))
+    git(repo, "remote", "add", "origin", str(remote))
+    git(repo, "push", "-q", "-u", "origin", "main")
+    git(repo, "remote", "set-head", "origin", "main")
+    return repo

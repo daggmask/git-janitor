@@ -1,8 +1,10 @@
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 SKIP_DIRS = frozenset({"node_modules", ".venv", "venv", "__pycache__", "bin", "obj"})
+ACTIVITY_FILES = ("HEAD", "index", "logs/HEAD", "ORIG_HEAD")
 
 
 def folder_exists(path: Path) -> bool:
@@ -33,3 +35,30 @@ def _should_descend(entry: os.DirEntry[str]) -> bool:
         return entry.is_dir(follow_symlinks=False)
     except OSError:
         return False
+
+
+def last_activity(git_dir: Path) -> datetime | None:
+    stamps = [_mtime(git_dir / name) for name in ACTIVITY_FILES]
+    known = [stamp for stamp in stamps if stamp is not None]
+    return max(known) if known else None
+
+
+def _mtime(path: Path) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    except OSError:
+        return None
+
+
+def is_inside(path: Path, folder: Path) -> bool:
+    return path.resolve().is_relative_to(folder.resolve())
+
+
+def is_held_open(folder: Path) -> bool:
+    probe = folder.with_name(f"{folder.name}.janitor-{os.getpid()}")
+    try:
+        folder.rename(probe)
+    except OSError:
+        return True
+    probe.rename(folder)
+    return False

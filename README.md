@@ -6,8 +6,7 @@ Working ticket by ticket leaves a trail of `repo-FP-314`, `repo-perf` and friend
 months nobody remembers which are merged, which have uncommitted work and which have commits that
 never got pushed. `git janitor` answers that per folder, with a reason you can read.
 
-Work in progress. Right now `scan` lists worktrees and flags zombies and uncommitted changes.
-Merge detection and deletion are coming.
+Work in progress. Linked worktrees are handled; separate clones are listed but always kept for now.
 
 ## Install
 
@@ -27,9 +26,32 @@ Git picks up any `git-*` executable on the PATH, so it runs as `git janitor`.
 
 ```bash
 git janitor scan C:/Repo
+git janitor scan C:/Repo --target origin/main --target origin/dev
+git janitor scan C:/Repo --delete
+git janitor scan C:/Repo --delete --force C:/Repo/app-FP-314
 ```
 
-Nothing is ever deleted by `scan`. Dry run is the default for every command.
+Without `--delete` nothing is touched. With it, safe worktrees are removed in parallel with
+`git worktree remove` and zombies are pruned.
+
+A worktree is safe only when all of this holds:
+
+- no uncommitted changes or untracked files
+- no stash made on its branch
+- every commit exists on a remote
+- every change is in a target branch, checked with `git cherry` for merges and rebases and with
+  patch-id for squash merges
+- not touched in the last `--idle-days` days (default 3)
+- not the folder you are standing in
+
+Right before removal the folder is renamed and renamed back. If a program holds something open in
+it (works on Windows) the folder is skipped instead of being half deleted.
+
+`--force` takes one folder and can be repeated. It never applies to locked worktrees or the main
+working tree. The age of the last commit is shown as a hint and is never a reason to delete.
+
+Remote branches are compared as your local git last saw them. Run `git fetch --prune` first for an
+up to date answer.
 
 | Status  | Meaning |
 |---------|---------|

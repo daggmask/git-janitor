@@ -1,5 +1,76 @@
 # Teknisk analys: Beszel (fork)
 
+## Prompt
+
+Steg 2, den genomtänkta prompten. Skickad så här i en ny session, utan följdfrågor:
+
+```text
+Teknisk analys av ett kodprojekt
+Analysera det lokala GitHub-repot som om du vore en utvecklare som precis har börjat i teamet. Jag vill förstå hur projektet är uppbyggt, hur det fungerar och vilka delar som kan vara problematiska.
+Börja med att gå igenom katalogstrukturen och läs sedan den relevanta koden, konfigurationen, beroendena, testerna och dokumentationen. Följ viktiga kodflöden mellan modulerna i stället för att bara dra slutsatser från filnamn eller README-filen.
+Hänvisa till relevanta filer och funktioner när du förklarar hur något fungerar. Skilj mellan sådant du har kunnat bekräfta i koden och sådant du bara misstänker. Om du inte kan fastställa något ska du säga det. Om projektet är för stort för att undersöka helt, fokusera på de viktigaste delarna och ange vad du inte har granskat.
+Ändra inga filer och kör inga destruktiva kommandon. Ta inte med hemligheter eller känsliga värden från konfigurationsfiler.
+1. Arkitektur och struktur
+
+* Vad gör projektet och vem är det till för?
+* Vilken typ av applikation är det?
+* Vilka är de viktigaste modulerna och katalogerna, och vad ansvarar de för?
+* Hur går flödet genom applikationen från början till slut?
+* Hur kommunicerar de olika delarna med varandra?
+* Finns det tydliga arkitekturmönster? Visa var de syns i koden.
+
+2. Externa beroenden
+Identifiera de tre viktigaste externa beroendena.
+För varje beroende, förklara vad det används till, var det förekommer i koden och hur viktigt det är för projektet. Bedöm också om det skulle vara enkelt eller svårt att ersätta.
+Skilj mellan direkta beroenden och beroenden som kommer via andra paket. Ta även upp viktiga verktyg för utveckling och testning.
+3. Integrationer mot externa system
+
+* Vilka externa system använder projektet, exempelvis databaser, API:er, molntjänster eller meddelandeköer?
+* Var finns koden för dessa integrationer?
+* Hur sker kommunikationen och vilka bibliotek eller protokoll används?
+* Hur hanteras autentisering, konfiguration och fel?
+* Vilka integrationer är nödvändiga för att projektet ska fungera?
+
+Kontrollera att integrationerna faktiskt används i koden och inte bara nämns i dokumentationen.
+4. Affärslogik och centrala kodflöden
+
+* Var finns projektets viktigaste logik?
+* Vilka funktioner, klasser eller moduler hanterar centrala regler och beslut?
+* Hur är logiken separerad från exempelvis datalagring, API:er och presentation?
+* Beskriv ett eller två viktiga kodflöden steg för steg och hänvisa till filerna.
+* Vilka delar går att ändra relativt enkelt, och vilka riskerar att påverka resten av systemet?
+
+Om projektet inte har traditionell affärslogik, fokusera på dess centrala funktionalitet.
+5. Teknisk skuld och problem
+Leta efter konkreta problem, till exempel:
+
+* Moduler som är starkt beroende av varandra eller har otydliga ansvarsområden.
+* Duplicerad kod eller kod som är svår att testa.
+* Bristande felhantering.
+* Otillräckliga tester.
+* Problem med konfiguration eller hantering av känslig information.
+* Föråldrade eller riskfyllda beroenden.
+* Bristfällig dokumentation eller en komplicerad utvecklingsmiljö.
+
+För varje problem du hittar, beskriv vad som är fel, var det finns, vilka konsekvenser det kan få och hur det skulle kunna åtgärdas. Ange också hur säker du är på bedömningen.
+Skilj mellan faktiska problem och möjliga risker. Ta inte upp något som ett problem enbart för att det skiljer sig från hur du själv skulle ha byggt systemet.
+Sammanställning
+Presentera analysen i följande ordning:
+
+1. Projektöversikt: Vad projektet gör och vem det riktar sig till.
+2. Arkitektur: Hur de viktigaste delarna hänger ihop.
+3. Tekniska beroenden: De tre viktigaste beroendena och vad de används till.
+4. Integrationer: Vilka externa system projektet kommunicerar med.
+5. Affärslogik: Var den centrala logiken finns och hur den fungerar.
+6. Tekniska problem: De viktigaste riskerna och möjliga förbättringarna.
+7. Att lära sig först: Vad en ny utvecklare bör förstå innan den börjar ändra kod.
+8. Osäkerheter: Vad som inte gick att fastställa och vad som behöver kontrolleras manuellt.
+
+Håll analysen konkret och undvik allmänna beskrivningar som inte stöds av koden. Avsluta med de fem viktigaste sakerna att förstå innan du börjar arbeta med projektet.
+```
+
+---
+
 Analysen bygger på en genomläsning av koden i `main` (senaste commit `e8970e46`, version `0.21.0` i [beszel.go](beszel.go)). Go och Bun finns inte installerade på maskinen där analysen gjordes, så **inga tester eller byggen har körts**. Allt nedan kommer från att läsa koden. Märkningen används så här:
 
 - **Bekräftat**: jag har sett det i koden.

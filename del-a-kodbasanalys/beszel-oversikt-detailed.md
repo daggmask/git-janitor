@@ -1,5 +1,21 @@
 # Beszel - projektöversikt (detailed)
 
+## Prompt
+
+Steg 1, den slarviga prompten. Skickad så här i en ny session:
+
+```text
+Kolla igenom det här projektet och förklara hur det fungerar, hur det är uppbyggt och vad som verkar bra eller dåligt med koden. Sammanfatta det viktigaste så att jag förstår projektet.
+```
+
+Följdprompt i samma session, den ligger bakom avsnitt 7:
+
+```text
+Installera de åt mig
+```
+
+---
+
 Genomgång av forken `daggmask/beszel_fork` (upstream `henrygd/beszel`), version 0.21.0, gjord 2026-10-16 på commit `e8970e46`.
 
 ## 1. Vad projektet är

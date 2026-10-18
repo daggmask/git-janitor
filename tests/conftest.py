@@ -45,7 +45,7 @@ def repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def pushed(repo: Path) -> Path:
+def repo_with_remote(repo: Path) -> Path:
     remote = repo.parent / "remote.git"
     git(repo.parent, "init", "-q", "--bare", "-b", "main", str(remote))
     git(repo, "remote", "add", "origin", str(remote))

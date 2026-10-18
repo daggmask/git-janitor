@@ -1,73 +1,80 @@
 from datetime import datetime, timedelta
 
-from git_janitor.models import Status, TargetCheck, Verdict, WorktreeFacts
+from git_janitor.models import MergeCheck, Status, Verdict, WorktreeFacts
 
 
-def classify(facts: WorktreeFacts, now: datetime, idle_days: int) -> Verdict:
-    status, reason = _decide(facts, now, idle_days)
+def classify_worktree(facts: WorktreeFacts, now: datetime, idle_days: int) -> Verdict:
+    status, reason = _status_and_reason(facts, now, idle_days)
     return Verdict(
-        path=facts.entry.path,
-        repository=facts.entry.repository,
-        branch=facts.entry.branch,
+        path=facts.worktree.path,
+        main_worktree_path=facts.worktree.main_worktree_path,
+        branch=facts.worktree.branch,
         status=status,
         reason=reason,
         last_commit_at=facts.last_commit_at,
     )
 
 
-def _decide(facts: WorktreeFacts, now: datetime, idle_days: int) -> tuple[Status, str]:
-    entry = facts.entry
-    if entry.is_main:
+def _status_and_reason(facts: WorktreeFacts, now: datetime, idle_days: int) -> tuple[Status, str]:
+    worktree = facts.worktree
+    if worktree.is_main:
         return Status.KEEP, "main working tree"
-    if not facts.exists:
+    if not facts.folder_exists:
         return Status.ZOMBIE, "folder is gone, prune the worktree entry"
-    if entry.locked:
+    if worktree.is_locked:
         return Status.KEEP, "worktree is locked"
-    if facts.holds_cwd:
+    if facts.contains_current_directory:
         return Status.KEEP, "you are standing in it"
-    if facts.forced:
+    if facts.is_forced:
         return Status.SAFE, "forced with --force"
-    if facts.changed_files:
-        return Status.KEEP, f"uncommitted changes in {_plural(facts.changed_files, 'file')}"
-    if facts.stashes:
-        return Status.KEEP, f"{_plural(facts.stashes, 'stash', 'stashes')} on this branch"
-    if facts.unpushed:
-        return Status.KEEP, f"{_plural(facts.unpushed, 'commit')} not pushed"
-    if _recently_used(facts.last_used_at, now, idle_days):
-        return Status.KEEP, f"used {_ago(facts.last_used_at, now)}, may still be in use"
-    return _merge_verdict(facts.targets)
+    if facts.changed_file_count:
+        changed_files = _count_with_noun(facts.changed_file_count, "file")
+        return Status.KEEP, f"uncommitted changes in {changed_files}"
+    if facts.stash_count:
+        stashes = _count_with_noun(facts.stash_count, "stash", "stashes")
+        return Status.KEEP, f"{stashes} on this branch"
+    if facts.unpushed_commit_count:
+        unpushed_commits = _count_with_noun(facts.unpushed_commit_count, "commit")
+        return Status.KEEP, f"{unpushed_commits} not pushed"
+    if _is_recently_used(facts.last_used_at, now, idle_days):
+        return Status.KEEP, f"used {_age_in_words(facts.last_used_at, now)}, may still be in use"
+    return _status_from_merge_checks(facts.merge_checks)
 
 
-def _merge_verdict(targets: tuple[TargetCheck, ...]) -> tuple[Status, str]:
-    if not targets:
+def _status_from_merge_checks(merge_checks: tuple[MergeCheck, ...]) -> tuple[Status, str]:
+    if not merge_checks:
         return Status.KEEP, "no target branch to check against, use --target"
-    for check in targets:
-        if check.commits == 0:
-            return Status.SAFE, f"already in {check.target}"
-        if is_merged(check):
-            return Status.SAFE, f"merged into {check.target}"
-    closest = min(targets, key=lambda check: check.unmerged)
-    return Status.KEEP, f"{_plural(closest.unmerged, 'commit')} not in {closest.target}"
+    for check in merge_checks:
+        if check.commits_ahead == 0:
+            return Status.SAFE, f"already in {check.target_branch}"
+        if is_proven_merged(check):
+            return Status.SAFE, f"merged into {check.target_branch}"
+    nearest = min(merge_checks, key=lambda check: check.commits_not_in_target)
+    missing_commits = _count_with_noun(nearest.commits_not_in_target, "commit")
+    return Status.KEEP, f"{missing_commits} not in {nearest.target_branch}"
 
 
-def is_merged(check: TargetCheck) -> bool:
-    if check.unmerged == 0:
+def is_proven_merged(check: MergeCheck) -> bool:
+    if check.commits_not_in_target == 0:
         return True
-    return check.branch_patch_id is not None and check.branch_patch_id in check.target_patch_ids
+    squash_patch_id = check.branch_diff_patch_id
+    return squash_patch_id is not None and squash_patch_id in check.target_commit_patch_ids
 
 
-def _recently_used(last_used_at: datetime | None, now: datetime, idle_days: int) -> bool:
-    return last_used_at is not None and now - last_used_at < timedelta(days=idle_days)
+def _is_recently_used(last_used_at: datetime | None, now: datetime, idle_days: int) -> bool:
+    if last_used_at is None or idle_days == 0:
+        return False
+    return now - last_used_at < timedelta(days=idle_days)
 
 
-def _ago(moment: datetime | None, now: datetime) -> str:
+def _age_in_words(moment: datetime | None, now: datetime) -> str:
     if moment is None:
         return "never"
     days = (now - moment).days
-    if days == 0:
+    if days < 1:
         return "today"
-    return f"{_plural(days, 'day')} ago"
+    return f"{_count_with_noun(days, 'day')} ago"
 
 
-def _plural(count: int, word: str, plural: str | None = None) -> str:
-    return f"{count} {word if count == 1 else plural or word + 's'}"
+def _count_with_noun(count: int, singular: str, plural: str | None = None) -> str:
+    return f"{count} {singular if count == 1 else plural or singular + 's'}"

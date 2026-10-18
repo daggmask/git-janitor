@@ -13,11 +13,13 @@ class GitError(Exception):
         self.stderr = stderr
 
 
-def _env_without_optional_locks() -> dict[str, str]:
+def _noninteractive_git_env() -> dict[str, str]:
     return {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
 
 
-def _run(args: list[str], cwd: Path, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+def _run_git_allowing_failure(
+    args: list[str], cwd: Path, stdin: str | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
@@ -25,40 +27,43 @@ def _run(args: list[str], cwd: Path, stdin: str | None = None) -> subprocess.Com
         capture_output=True,
         encoding="utf-8",
         errors="surrogateescape",
-        env=_env_without_optional_locks(),
+        env=_noninteractive_git_env(),
         check=False,
     )
 
 
-def run_git(args: list[str], cwd: Path, stdin: str | None = None) -> str:
-    result = _run(args, cwd, stdin)
+def _run_git(args: list[str], cwd: Path, stdin: str | None = None) -> str:
+    result = _run_git_allowing_failure(args, cwd, stdin)
     if result.returncode != 0:
         raise GitError(args, cwd, result.returncode, result.stderr)
     return result.stdout
 
 
-def common_dir(path: Path) -> Path:
-    out = run_git(["rev-parse", "--path-format=absolute", "--git-common-dir"], path)
-    return Path(out.strip()).resolve()
+def common_git_dir(path: Path) -> Path:
+    output = _run_git(["rev-parse", "--path-format=absolute", "--git-common-dir"], path)
+    return Path(output.strip()).resolve()
 
 
-def git_dir(path: Path) -> Path:
-    return Path(run_git(["rev-parse", "--absolute-git-dir"], path).strip())
+def worktree_git_dir(path: Path) -> Path:
+    return Path(_run_git(["rev-parse", "--absolute-git-dir"], path).strip())
 
 
 def list_worktrees(path: Path) -> list[WorktreeEntry]:
-    return parse_worktree_list(run_git(["worktree", "list", "--porcelain"], path))
+    return parse_worktree_list(_run_git(["worktree", "list", "--porcelain"], path))
 
 
 def parse_worktree_list(output: str) -> list[WorktreeEntry]:
-    blocks = [block for block in output.strip().split("\n\n") if block.strip()]
-    if not blocks:
+    worktree_blocks = [block for block in output.strip().split("\n\n") if block.strip()]
+    if not worktree_blocks:
         return []
-    repository = Path(_fields(blocks[0])["worktree"])
-    return [_entry(_fields(block), repository, is_main=i == 0) for i, block in enumerate(blocks)]
+    main_worktree_path = Path(_porcelain_fields(worktree_blocks[0])["worktree"])
+    return [
+        _worktree_entry(_porcelain_fields(block), main_worktree_path, is_main=index == 0)
+        for index, block in enumerate(worktree_blocks)
+    ]
 
 
-def _fields(block: str) -> dict[str, str]:
+def _porcelain_fields(block: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     for line in block.splitlines():
         key, _, value = line.partition(" ")
@@ -66,91 +71,99 @@ def _fields(block: str) -> dict[str, str]:
     return fields
 
 
-def _entry(fields: dict[str, str], repository: Path, is_main: bool) -> WorktreeEntry:
-    branch = fields.get("branch")
+def _worktree_entry(
+    fields: dict[str, str], main_worktree_path: Path, is_main: bool
+) -> WorktreeEntry:
+    branch_ref = fields.get("branch")
     return WorktreeEntry(
         path=Path(fields["worktree"]),
-        repository=repository,
-        head=fields.get("HEAD"),
-        branch=branch.removeprefix("refs/heads/") if branch else None,
+        main_worktree_path=main_worktree_path,
+        head_commit=fields.get("HEAD"),
+        branch=branch_ref.removeprefix("refs/heads/") if branch_ref else None,
         is_main=is_main,
-        detached="detached" in fields,
-        bare="bare" in fields,
-        locked="locked" in fields,
-        prunable="prunable" in fields,
+        is_detached="detached" in fields,
+        is_bare="bare" in fields,
+        is_locked="locked" in fields,
+        is_prunable="prunable" in fields,
     )
 
 
 def changed_file_count(path: Path) -> int:
-    out = run_git(["status", "--porcelain=v2"], path)
-    return sum(1 for line in out.splitlines() if line and not line.startswith("#"))
+    status_output = _run_git(["status", "--porcelain=v2"], path)
+    return sum(1 for line in status_output.splitlines() if line and not line.startswith("#"))
 
 
 def last_commit_time(path: Path) -> datetime | None:
     try:
-        out = run_git(["log", "-1", "--format=%ct"], path)
+        output = _run_git(["log", "-1", "--format=%ct"], path)
     except GitError:
         return None
-    stamp = out.strip()
-    return datetime.fromtimestamp(int(stamp), tz=UTC) if stamp else None
+    unix_seconds = output.strip()
+    return datetime.fromtimestamp(int(unix_seconds), tz=UTC) if unix_seconds else None
 
 
-def default_target(path: Path) -> str | None:
-    result = _run(["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], path)
+def origin_default_branch(path: Path) -> str | None:
+    result = _run_git_allowing_failure(
+        ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], path
+    )
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
 
 
 def ref_exists(path: Path, ref: str) -> bool:
-    return _run(["rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], path).returncode == 0
+    result = _run_git_allowing_failure(["rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], path)
+    return result.returncode == 0
 
 
-def stash_branches(path: Path) -> list[str]:
-    out = run_git(["stash", "list", "--format=%gs"], path)
-    return parse_stash_branches(out)
+def stash_branch_names(path: Path) -> list[str]:
+    return parse_stash_branch_names(_run_git(["stash", "list", "--format=%gs"], path))
 
 
-def parse_stash_branches(output: str) -> list[str]:
-    branches = []
-    for subject in output.splitlines():
-        head, _, _ = subject.partition(":")
+def parse_stash_branch_names(output: str) -> list[str]:
+    branch_names = []
+    for stash_subject in output.splitlines():
+        stash_label, _, _ = stash_subject.partition(":")
         for prefix in ("WIP on ", "On "):
-            if head.startswith(prefix):
-                branches.append(head.removeprefix(prefix))
+            if stash_label.startswith(prefix):
+                branch_names.append(stash_label.removeprefix(prefix))
                 break
-    return branches
+    return branch_names
 
 
-def unpushed_count(path: Path) -> int:
-    return int(run_git(["rev-list", "--count", "HEAD", "--not", "--remotes"], path).strip())
+def unpushed_commit_count(path: Path) -> int:
+    output = _run_git(["rev-list", "--count", "HEAD", "--not", "--remotes"], path)
+    return int(output.strip())
 
 
-def cherry_marks(path: Path, target: str) -> list[str]:
-    out = run_git(["cherry", target, "HEAD"], path)
-    return [line[0] for line in out.splitlines() if line]
+def cherry_marks(path: Path, target_branch: str) -> list[str]:
+    output = _run_git(["cherry", target_branch, "HEAD"], path)
+    return [line[0] for line in output.splitlines() if line]
 
 
-def branch_patch_id(path: Path, target: str) -> str | None:
-    diff = run_git(["diff", "--no-ext-diff", "--no-color", f"{target}...HEAD"], path)
-    ids = parse_patch_ids(run_git(["patch-id", "--stable"], path, stdin=diff))
-    return next(iter(ids), None)
+def branch_diff_patch_id(path: Path, target_branch: str) -> str | None:
+    branch_diff = _run_git(["diff", "--no-ext-diff", "--no-color", f"{target_branch}...HEAD"], path)
+    patch_ids = parse_patch_ids(_run_git(["patch-id", "--stable"], path, stdin=branch_diff))
+    return next(iter(patch_ids), None)
 
 
-def target_patch_ids(path: Path, target: str) -> frozenset[str]:
-    log = run_git(
-        ["log", "-p", "--no-merges", "--no-ext-diff", "--no-color", f"HEAD..{target}"], path
+def target_commit_patch_ids(path: Path, target_branch: str) -> frozenset[str]:
+    target_commits = _run_git(
+        ["log", "-p", "--no-merges", "--no-ext-diff", "--no-color", f"HEAD..{target_branch}"],
+        path,
     )
-    return frozenset(parse_patch_ids(run_git(["patch-id", "--stable"], path, stdin=log)))
+    patch_ids = parse_patch_ids(_run_git(["patch-id", "--stable"], path, stdin=target_commits))
+    return frozenset(patch_ids)
 
 
 def parse_patch_ids(output: str) -> list[str]:
     return [line.split()[0] for line in output.splitlines() if line.strip()]
 
 
-def remove_worktree(repository: Path, worktree: Path, force: bool) -> None:
-    run_git(["worktree", "remove", *(["--force"] if force else []), str(worktree)], repository)
+def remove_worktree(main_worktree_path: Path, worktree_path: Path, force: bool) -> None:
+    force_flag = ["--force"] if force else []
+    _run_git(["worktree", "remove", *force_flag, str(worktree_path)], main_worktree_path)
 
 
-def prune_worktrees(repository: Path) -> None:
-    run_git(["worktree", "prune"], repository)
+def prune_worktrees(main_worktree_path: Path) -> None:
+    _run_git(["worktree", "prune"], main_worktree_path)

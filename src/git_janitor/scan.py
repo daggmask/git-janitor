@@ -5,96 +5,116 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from git_janitor import fs, git
-from git_janitor.analysis import classify
-from git_janitor.models import TargetCheck, Verdict, WorktreeEntry, WorktreeFacts
+from git_janitor.analysis import classify_worktree
+from git_janitor.models import MergeCheck, Verdict, WorktreeEntry, WorktreeFacts
 
 
 @dataclass(frozen=True)
 class ScanOptions:
-    targets: tuple[str, ...] = ()
+    target_branches: tuple[str, ...] = ()
     idle_days: int = 3
-    forced: frozenset[Path] = frozenset()
-    cwd: Path = Path(".")
+    forced_paths: frozenset[Path] = frozenset()
+    current_directory: Path = Path(".")
 
 
 @dataclass(frozen=True)
-class _Repository:
+class _RepositoryInfo:
     worktrees: tuple[WorktreeEntry, ...]
-    targets: tuple[str, ...]
-    stash_branches: tuple[str, ...]
+    target_branches: tuple[str, ...]
+    stash_branch_names: tuple[str, ...]
 
 
-def scan(root: Path, max_depth: int, options: ScanOptions) -> list[Verdict]:
-    repositories = fs.find_repositories(root, max_depth)
+def scan_worktrees(root: Path, max_depth: int, options: ScanOptions) -> list[Verdict]:
+    git_folders = fs.find_git_folders(root, max_depth)
     now = datetime.now(UTC)
     with ThreadPoolExecutor() as pool:
-        common_dirs = list(pool.map(git.common_dir, repositories))
-        unique = _one_per_repository(zip(repositories, common_dirs, strict=True))
-        repos = list(pool.map(lambda path: _repository(path, options.targets), unique))
-        jobs = [(entry, repo) for repo in repos for entry in repo.worktrees]
-        facts = pool.map(lambda job: _facts(job[0], job[1], options), jobs)
-        return [classify(f, now, options.idle_days) for f in facts]
+        common_git_dirs = list(pool.map(git.common_git_dir, git_folders))
+        one_folder_per_repository = _first_folder_per_repository(
+            zip(git_folders, common_git_dirs, strict=True)
+        )
+        repositories = list(
+            pool.map(
+                lambda folder: _load_repository(folder, options.target_branches),
+                one_folder_per_repository,
+            )
+        )
+        worktrees_with_repository = [
+            (worktree, repository)
+            for repository in repositories
+            for worktree in repository.worktrees
+        ]
+        all_facts = pool.map(
+            lambda pair: _gather_worktree_facts(pair[0], pair[1], options),
+            worktrees_with_repository,
+        )
+        return [classify_worktree(facts, now, options.idle_days) for facts in all_facts]
 
 
-def _one_per_repository(repositories: Iterable[tuple[Path, Path]]) -> list[Path]:
-    seen: set[Path] = set()
-    unique: list[Path] = []
-    for repo, common in repositories:
-        if common not in seen:
-            seen.add(common)
-            unique.append(repo)
-    return unique
+def _first_folder_per_repository(
+    folders_with_common_git_dir: Iterable[tuple[Path, Path]],
+) -> list[Path]:
+    seen_common_git_dirs: set[Path] = set()
+    first_folders: list[Path] = []
+    for folder, common_git_dir in folders_with_common_git_dir:
+        if common_git_dir not in seen_common_git_dirs:
+            seen_common_git_dirs.add(common_git_dir)
+            first_folders.append(folder)
+    return first_folders
 
 
-def _repository(path: Path, wanted_targets: tuple[str, ...]) -> _Repository:
-    worktrees = tuple(entry for entry in git.list_worktrees(path) if not entry.bare)
-    return _Repository(
+def _load_repository(folder: Path, requested_targets: tuple[str, ...]) -> _RepositoryInfo:
+    worktrees = tuple(worktree for worktree in git.list_worktrees(folder) if not worktree.is_bare)
+    return _RepositoryInfo(
         worktrees=worktrees,
-        targets=_targets(path, wanted_targets),
-        stash_branches=tuple(git.stash_branches(path)),
+        target_branches=_existing_target_branches(folder, requested_targets),
+        stash_branch_names=tuple(git.stash_branch_names(folder)),
     )
 
 
-def _targets(path: Path, wanted: tuple[str, ...]) -> tuple[str, ...]:
-    if wanted:
-        return tuple(target for target in wanted if git.ref_exists(path, target))
-    default = git.default_target(path)
-    return (default,) if default else ()
+def _existing_target_branches(folder: Path, requested: tuple[str, ...]) -> tuple[str, ...]:
+    if requested:
+        return tuple(branch for branch in requested if git.ref_exists(folder, branch))
+    default_branch = git.origin_default_branch(folder)
+    return (default_branch,) if default_branch else ()
 
 
-def _facts(entry: WorktreeEntry, repo: _Repository, options: ScanOptions) -> WorktreeFacts:
-    exists = fs.folder_exists(entry.path)
-    if entry.is_main or not exists:
-        return WorktreeFacts(entry=entry, exists=exists)
-    path = entry.path
+def _gather_worktree_facts(
+    worktree: WorktreeEntry, repository: _RepositoryInfo, options: ScanOptions
+) -> WorktreeFacts:
+    folder_exists = fs.folder_exists(worktree.path)
+    if worktree.is_main or not folder_exists:
+        return WorktreeFacts(worktree=worktree, folder_exists=folder_exists)
+    path = worktree.path
     return WorktreeFacts(
-        entry=entry,
-        exists=True,
-        changed_files=git.changed_file_count(path),
+        worktree=worktree,
+        folder_exists=True,
+        changed_file_count=git.changed_file_count(path),
         last_commit_at=git.last_commit_time(path),
-        last_used_at=fs.last_activity(git.git_dir(path)),
-        holds_cwd=fs.is_inside(options.cwd, path),
-        stashes=_stash_count(entry, repo),
-        unpushed=git.unpushed_count(path),
-        targets=tuple(_target_check(path, target) for target in repo.targets),
-        forced=path.resolve() in options.forced,
+        last_used_at=fs.last_used_time(git.worktree_git_dir(path)),
+        contains_current_directory=fs.is_inside_folder(options.current_directory, path),
+        stash_count=_stash_count_on_branch(worktree, repository),
+        unpushed_commit_count=git.unpushed_commit_count(path),
+        merge_checks=tuple(
+            _check_merged_into(path, branch) for branch in repository.target_branches
+        ),
+        is_forced=path.resolve() in options.forced_paths,
     )
 
 
-def _stash_count(entry: WorktreeEntry, repo: _Repository) -> int:
-    branch = entry.branch or "(no branch)"
-    return repo.stash_branches.count(branch)
+def _stash_count_on_branch(worktree: WorktreeEntry, repository: _RepositoryInfo) -> int:
+    stash_label = worktree.branch or "(no branch)"
+    return repository.stash_branch_names.count(stash_label)
 
 
-def _target_check(path: Path, target: str) -> TargetCheck:
-    marks = git.cherry_marks(path, target)
-    unmerged = marks.count("+")
-    if unmerged == 0:
-        return TargetCheck(target=target, commits=len(marks), unmerged=0)
-    return TargetCheck(
-        target=target,
-        commits=len(marks),
-        unmerged=unmerged,
-        branch_patch_id=git.branch_patch_id(path, target),
-        target_patch_ids=git.target_patch_ids(path, target),
+def _check_merged_into(path: Path, target_branch: str) -> MergeCheck:
+    cherry_marks = git.cherry_marks(path, target_branch)
+    commits_not_in_target = cherry_marks.count("+")
+    if commits_not_in_target == 0:
+        return MergeCheck(target_branch, commits_ahead=len(cherry_marks), commits_not_in_target=0)
+    return MergeCheck(
+        target_branch=target_branch,
+        commits_ahead=len(cherry_marks),
+        commits_not_in_target=commits_not_in_target,
+        branch_diff_patch_id=git.branch_diff_patch_id(path, target_branch),
+        target_commit_patch_ids=git.target_commit_patch_ids(path, target_branch),
     )

@@ -3,33 +3,33 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-SKIP_DIRS = frozenset({"node_modules", ".venv", "venv", "__pycache__", "bin", "obj"})
-ACTIVITY_FILES = ("HEAD", "index", "logs/HEAD", "ORIG_HEAD")
+FOLDERS_NOT_SEARCHED = frozenset({"node_modules", ".venv", "venv", "__pycache__", "bin", "obj"})
+GIT_FILES_TOUCHED_ON_USE = ("HEAD", "index", "logs/HEAD", "ORIG_HEAD")
 
 
 def folder_exists(path: Path) -> bool:
     return path.is_dir()
 
 
-def find_repositories(root: Path, max_depth: int) -> list[Path]:
-    return sorted(_walk(root, max_depth))
+def find_git_folders(root: Path, max_depth: int) -> list[Path]:
+    return sorted(_walk_for_git_folders(root, max_depth))
 
 
-def _walk(folder: Path, depth_left: int) -> Iterator[Path]:
+def _walk_for_git_folders(folder: Path, levels_left: int) -> Iterator[Path]:
     if (folder / ".git").exists():
         yield folder
-    if depth_left == 0:
+    if levels_left == 0:
         return
     try:
-        children = [entry for entry in os.scandir(folder) if _should_descend(entry)]
+        subfolders = [entry for entry in os.scandir(folder) if _is_folder_to_search(entry)]
     except OSError:
         return
-    for child in children:
-        yield from _walk(Path(child.path), depth_left - 1)
+    for subfolder in subfolders:
+        yield from _walk_for_git_folders(Path(subfolder.path), levels_left - 1)
 
 
-def _should_descend(entry: os.DirEntry[str]) -> bool:
-    if entry.name in SKIP_DIRS or entry.name.startswith("."):
+def _is_folder_to_search(entry: os.DirEntry[str]) -> bool:
+    if entry.name in FOLDERS_NOT_SEARCHED or entry.name.startswith("."):
         return False
     try:
         return entry.is_dir(follow_symlinks=False)
@@ -37,28 +37,28 @@ def _should_descend(entry: os.DirEntry[str]) -> bool:
         return False
 
 
-def last_activity(git_dir: Path) -> datetime | None:
-    stamps = [_mtime(git_dir / name) for name in ACTIVITY_FILES]
-    known = [stamp for stamp in stamps if stamp is not None]
-    return max(known) if known else None
+def last_used_time(git_dir: Path) -> datetime | None:
+    modified_times = [_modified_time(git_dir / name) for name in GIT_FILES_TOUCHED_ON_USE]
+    known_times = [time for time in modified_times if time is not None]
+    return max(known_times) if known_times else None
 
 
-def _mtime(path: Path) -> datetime | None:
+def _modified_time(path: Path) -> datetime | None:
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
     except OSError:
         return None
 
 
-def is_inside(path: Path, folder: Path) -> bool:
+def is_inside_folder(path: Path, folder: Path) -> bool:
     return path.resolve().is_relative_to(folder.resolve())
 
 
-def is_held_open(folder: Path) -> bool:
-    probe = folder.with_name(f"{folder.name}.janitor-{os.getpid()}")
+def is_in_use_by_another_program(folder: Path) -> bool:
+    temporary_path = folder.with_name(f"{folder.name}.janitor-{os.getpid()}")
     try:
-        folder.rename(probe)
+        folder.rename(temporary_path)
     except OSError:
         return True
-    probe.rename(folder)
+    temporary_path.rename(folder)
     return False

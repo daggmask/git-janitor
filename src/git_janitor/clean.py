@@ -2,36 +2,52 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from git_janitor import fs, git
-from git_janitor.models import Removal, Status, Verdict
+from git_janitor.models import RemovalResult, Status, Verdict
 
 
-def clean(verdicts: list[Verdict], forced: frozenset[Path]) -> list[Removal]:
-    safe = [v for v in verdicts if v.status is Status.SAFE and not _is_main(v)]
-    zombies = [v for v in verdicts if v.status is Status.ZOMBIE]
-    repos = sorted({v.repository for v in zombies})
+def remove_safe_worktrees(
+    verdicts: list[Verdict], forced_paths: frozenset[Path]
+) -> list[RemovalResult]:
+    safe_worktrees = [
+        verdict
+        for verdict in verdicts
+        if verdict.status is Status.SAFE and not _is_main_worktree(verdict)
+    ]
+    zombies = [verdict for verdict in verdicts if verdict.status is Status.ZOMBIE]
+    repositories_with_zombies = sorted({zombie.main_worktree_path for zombie in zombies})
     with ThreadPoolExecutor() as pool:
-        removals = list(pool.map(lambda v: _remove(v, v.path.resolve() in forced), safe))
-        prune_errors = dict(zip(repos, pool.map(_prune, repos), strict=True))
-    return removals + [Removal(v.path, prune_errors[v.repository]) for v in zombies]
+        removals = list(
+            pool.map(
+                lambda verdict: _remove_worktree(verdict, verdict.path.resolve() in forced_paths),
+                safe_worktrees,
+            )
+        )
+        prune_errors = pool.map(_prune_zombies, repositories_with_zombies)
+        prune_error_by_repository = dict(zip(repositories_with_zombies, prune_errors, strict=True))
+    prunes = [
+        RemovalResult(zombie.path, prune_error_by_repository[zombie.main_worktree_path])
+        for zombie in zombies
+    ]
+    return removals + prunes
 
 
-def _is_main(verdict: Verdict) -> bool:
-    return verdict.path.resolve() == verdict.repository.resolve()
+def _is_main_worktree(verdict: Verdict) -> bool:
+    return verdict.path.resolve() == verdict.main_worktree_path.resolve()
 
 
-def _remove(verdict: Verdict, force: bool) -> Removal:
-    if fs.is_held_open(verdict.path):
-        return Removal(verdict.path, "in use by another program, skipped")
+def _remove_worktree(verdict: Verdict, force: bool) -> RemovalResult:
+    if fs.is_in_use_by_another_program(verdict.path):
+        return RemovalResult(verdict.path, "in use by another program, skipped")
     try:
-        git.remove_worktree(verdict.repository, verdict.path, force)
+        git.remove_worktree(verdict.main_worktree_path, verdict.path, force)
     except git.GitError as error:
-        return Removal(verdict.path, error.stderr.strip() or str(error))
-    return Removal(verdict.path)
+        return RemovalResult(verdict.path, error.stderr.strip() or str(error))
+    return RemovalResult(verdict.path)
 
 
-def _prune(repository: Path) -> str | None:
+def _prune_zombies(main_worktree_path: Path) -> str | None:
     try:
-        git.prune_worktrees(repository)
+        git.prune_worktrees(main_worktree_path)
     except git.GitError as error:
         return error.stderr.strip() or str(error)
     return None

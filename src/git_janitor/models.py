@@ -13,43 +13,43 @@ class Status(Enum):
 @dataclass(frozen=True)
 class WorktreeEntry:
     path: Path
-    repository: Path
-    head: str | None
+    main_worktree_path: Path
+    head_commit: str | None
     branch: str | None
     is_main: bool
-    detached: bool = False
-    bare: bool = False
-    locked: bool = False
-    prunable: bool = False
+    is_detached: bool = False
+    is_bare: bool = False
+    is_locked: bool = False
+    is_prunable: bool = False
 
 
 @dataclass(frozen=True)
-class TargetCheck:
-    target: str
-    commits: int
-    unmerged: int
-    branch_patch_id: str | None = None
-    target_patch_ids: frozenset[str] = frozenset()
+class MergeCheck:
+    target_branch: str
+    commits_ahead: int
+    commits_not_in_target: int
+    branch_diff_patch_id: str | None = None
+    target_commit_patch_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
 class WorktreeFacts:
-    entry: WorktreeEntry
-    exists: bool
-    changed_files: int = 0
+    worktree: WorktreeEntry
+    folder_exists: bool
+    changed_file_count: int = 0
     last_commit_at: datetime | None = None
     last_used_at: datetime | None = None
-    holds_cwd: bool = False
-    stashes: int = 0
-    unpushed: int = 0
-    targets: tuple[TargetCheck, ...] = ()
-    forced: bool = False
+    contains_current_directory: bool = False
+    stash_count: int = 0
+    unpushed_commit_count: int = 0
+    merge_checks: tuple[MergeCheck, ...] = ()
+    is_forced: bool = False
 
 
 @dataclass(frozen=True)
 class Verdict:
     path: Path
-    repository: Path
+    main_worktree_path: Path
     branch: str | None
     status: Status
     reason: str
@@ -57,6 +57,6 @@ class Verdict:
 
 
 @dataclass(frozen=True)
-class Removal:
+class RemovalResult:
     path: Path
     error: str | None = None

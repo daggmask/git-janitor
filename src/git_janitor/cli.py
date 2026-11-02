@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.table import Table
 
 from git_janitor import __version__
-from git_janitor.clean import remove_safe_worktrees
+from git_janitor.clean import remove_safe_and_prune_zombies
 from git_janitor.git import GitError
 from git_janitor.models import RemovalResult, Status, Verdict
 from git_janitor.scan import ScanOptions, scan_worktrees
@@ -77,7 +77,7 @@ def scan(
     console = Console()
     console.print(_verdict_table(verdicts, root))
     if delete:
-        _print_removal_results(console, remove_safe_worktrees(verdicts, forced_paths), root)
+        _print_removal_results(console, remove_safe_and_prune_zombies(verdicts), root)
     else:
         console.print(_dry_run_summary(verdicts))
 

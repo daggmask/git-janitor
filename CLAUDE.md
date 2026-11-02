@@ -24,6 +24,8 @@ It runs as `git janitor` (git picks up any `git-*` executable on the PATH) and s
 src/git_janitor/
   cli.py            Typer app, parsing and output only
   analysis.py       pure logic: given repo facts, decide status and reason
+  scan.py           finds repos, gathers facts through git.py and fs.py, classifies
+  clean.py          removes safe worktrees and prunes zombies through git.py
   git.py            everything that starts a git process
   fs.py             everything that scans or deletes folders
   models.py         dataclasses passed between the layers

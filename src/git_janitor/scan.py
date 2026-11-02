@@ -94,7 +94,7 @@ def _failed_repository(
         worktrees=worktrees,
         target_branches=(),
         stash_branch_names=(),
-        load_failure=_git_failure_reason(error),
+        load_failure=error.last_line,
     )
 
 
@@ -102,11 +102,6 @@ def _unreadable_folder(folder: Path) -> WorktreeEntry:
     return WorktreeEntry(
         path=folder, main_worktree_path=folder, head_commit=None, branch=None, is_main=False
     )
-
-
-def _git_failure_reason(error: git.GitError) -> str:
-    stderr_lines = error.stderr.strip().splitlines()
-    return stderr_lines[-1] if stderr_lines else str(error)
 
 
 def _existing_target_branches(folder: Path, requested: tuple[str, ...]) -> tuple[str, ...]:
@@ -129,9 +124,7 @@ def _gather_worktree_facts(
     try:
         return _read_worktree_facts(worktree, repository, options)
     except git.GitError as error:
-        return WorktreeFacts(
-            worktree=worktree, folder_exists=True, git_failure=_git_failure_reason(error)
-        )
+        return WorktreeFacts(worktree=worktree, folder_exists=True, git_failure=error.last_line)
 
 
 def _read_worktree_facts(
@@ -161,13 +154,17 @@ def _stash_count_on_branch(worktree: WorktreeEntry, repository: _RepositoryInfo)
 
 def _check_merged_into(path: Path, target_branch: str) -> MergeCheck:
     cherry_marks = git.cherry_marks(path, target_branch)
-    commits_not_in_target = cherry_marks.count("+")
-    if commits_not_in_target == 0:
-        return MergeCheck(target_branch, commits_ahead=len(cherry_marks), commits_not_in_target=0)
+    commits_without_patch_in_target = cherry_marks.count("+")
+    if commits_without_patch_in_target == 0:
+        return MergeCheck(
+            target_branch,
+            commits_ahead_of_target=len(cherry_marks),
+            commits_without_patch_in_target=0,
+        )
     return MergeCheck(
         target_branch=target_branch,
-        commits_ahead=len(cherry_marks),
-        commits_not_in_target=commits_not_in_target,
+        commits_ahead_of_target=len(cherry_marks),
+        commits_without_patch_in_target=commits_without_patch_in_target,
         branch_diff_patch_id=git.branch_diff_patch_id(path, target_branch),
         target_commit_patch_ids=git.target_commit_patch_ids(path, target_branch),
     )

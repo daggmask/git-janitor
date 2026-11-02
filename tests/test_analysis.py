@@ -17,9 +17,11 @@ LINKED_WORKTREE = WorktreeEntry(
     is_main=False,
 )
 
-MERGED_INTO_MAIN = MergeCheck(target_branch="origin/main", commits_ahead=2, commits_not_in_target=0)
+MERGED_INTO_MAIN = MergeCheck(
+    target_branch="origin/main", commits_ahead_of_target=2, commits_without_patch_in_target=0
+)
 THREE_COMMITS_NOT_IN_MAIN = MergeCheck(
-    target_branch="origin/main", commits_ahead=3, commits_not_in_target=3
+    target_branch="origin/main", commits_ahead_of_target=3, commits_without_patch_in_target=3
 )
 
 
@@ -81,6 +83,11 @@ def test_worktree_holding_the_current_directory_is_kept() -> None:
     verdict = verdict_for(contains_current_directory=True, is_forced=True)
     assert verdict.status is Status.KEEP
     assert verdict.reason == "you are standing in it"
+
+
+def test_force_is_carried_to_the_verdict_for_removal() -> None:
+    assert verdict_for(is_forced=True).is_forced
+    assert not verdict_for().is_forced
 
 
 def test_force_overrides_uncommitted_changes() -> None:
@@ -160,7 +167,7 @@ def test_patch_id_missing_from_target_is_not_merged() -> None:
 
 def test_branch_without_own_commits_is_safe() -> None:
     nothing_ahead = MergeCheck(
-        target_branch="origin/main", commits_ahead=0, commits_not_in_target=0
+        target_branch="origin/main", commits_ahead_of_target=0, commits_without_patch_in_target=0
     )
     verdict = verdict_for(merge_checks=(nothing_ahead,))
     assert verdict.status is Status.SAFE
@@ -169,7 +176,7 @@ def test_branch_without_own_commits_is_safe() -> None:
 
 def test_any_target_can_prove_merge() -> None:
     merged_into_dev = MergeCheck(
-        target_branch="origin/dev", commits_ahead=1, commits_not_in_target=0
+        target_branch="origin/dev", commits_ahead_of_target=1, commits_without_patch_in_target=0
     )
     verdict = verdict_for(merge_checks=(THREE_COMMITS_NOT_IN_MAIN, merged_into_dev))
     assert verdict.reason == "merged into origin/dev"
@@ -177,7 +184,7 @@ def test_any_target_can_prove_merge() -> None:
 
 def test_reason_names_the_closest_target() -> None:
     one_commit_not_in_dev = MergeCheck(
-        target_branch="origin/dev", commits_ahead=3, commits_not_in_target=1
+        target_branch="origin/dev", commits_ahead_of_target=3, commits_without_patch_in_target=1
     )
     verdict = verdict_for(merge_checks=(THREE_COMMITS_NOT_IN_MAIN, one_commit_not_in_dev))
     assert verdict.reason == "1 commit not in origin/dev"

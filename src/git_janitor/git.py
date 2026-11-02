@@ -12,6 +12,11 @@ class GitError(Exception):
         self.returncode = returncode
         self.stderr = stderr
 
+    @property
+    def last_line(self) -> str:
+        stderr_lines = self.stderr.strip().splitlines()
+        return stderr_lines[-1] if stderr_lines else str(self)
+
 
 TURN_OFF_FSMONITOR_AND_SIGNATURE_CHECKS = (
     "-c",

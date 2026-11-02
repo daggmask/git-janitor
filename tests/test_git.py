@@ -89,6 +89,12 @@ def test_parse_worktree_list_reads_every_field() -> None:
     assert gone.is_prunable
 
 
+def test_git_error_last_line_skips_warnings() -> None:
+    error = janitor_git.GitError(["status"], Path("."), 128, "warning: x\nfatal: y\n")
+
+    assert error.last_line == "fatal: y"
+
+
 def test_parse_stash_branch_names_handles_both_subject_forms() -> None:
     output = "WIP on main: abc123 msg\nOn feature/x: my stash\nOn (no branch): wip\n"
 
@@ -437,6 +443,30 @@ def test_delete_skips_worktree_with_open_file(repo_with_remote: Path) -> None:
     assert result.exit_code == 1
     assert "in use by another program, skipped" in result.output
     assert (worktree_in_use / "README.md").exists()
+
+
+def test_delete_reports_folder_that_could_not_be_renamed_back(
+    repo_with_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stuck = add_worktree(repo_with_remote, "stuck")
+    fine = add_worktree(repo_with_remote, "fine")
+    real_rename = Path.rename
+
+    def rename_that_fails_moving_stuck_back(self: Path, target: Path) -> Path:
+        if self.name.startswith("stuck.janitor-"):
+            raise PermissionError("held open")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", rename_that_fails_moving_stuck_back)
+
+    result = CliRunner().invoke(
+        app, ["scan", str(repo_with_remote.parent), "--idle-days", "0", "--delete"]
+    )
+
+    assert result.exit_code == 1
+    assert "could not move it back" in result.output
+    assert not fine.exists()
+    assert not stuck.exists()
 
 
 def test_cli_scan_empty_folder(tmp_path: Path) -> None:

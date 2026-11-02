@@ -26,8 +26,8 @@ class WorktreeEntry:
 @dataclass(frozen=True)
 class MergeCheck:
     target_branch: str
-    commits_ahead: int
-    commits_not_in_target: int
+    commits_ahead_of_target: int
+    commits_without_patch_in_target: int
     branch_diff_patch_id: str | None = None
     target_commit_patch_ids: frozenset[str] = frozenset()
 
@@ -55,6 +55,7 @@ class Verdict:
     status: Status
     reason: str
     last_commit_at: datetime | None
+    is_forced: bool
 
 
 @dataclass(frozen=True)

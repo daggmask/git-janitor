@@ -5,9 +5,7 @@ from git_janitor import fs, git
 from git_janitor.models import RemovalResult, Status, Verdict
 
 
-def remove_safe_worktrees(
-    verdicts: list[Verdict], forced_paths: frozenset[Path]
-) -> list[RemovalResult]:
+def remove_safe_and_prune_zombies(verdicts: list[Verdict]) -> list[RemovalResult]:
     safe_worktrees = [
         verdict
         for verdict in verdicts
@@ -18,7 +16,7 @@ def remove_safe_worktrees(
     with ThreadPoolExecutor() as pool:
         removals = list(
             pool.map(
-                lambda verdict: _remove_worktree(verdict, verdict.path.resolve() in forced_paths),
+                lambda verdict: _remove_worktree(verdict, verdict.is_forced),
                 safe_worktrees,
             )
         )
@@ -36,12 +34,13 @@ def _is_main_worktree(verdict: Verdict) -> bool:
 
 
 def _remove_worktree(verdict: Verdict, force: bool) -> RemovalResult:
-    if fs.is_in_use_by_another_program(verdict.path):
-        return RemovalResult(verdict.path, "in use by another program, skipped")
+    folder_busy_reason = fs.check_folder_free_by_renaming(verdict.path)
+    if folder_busy_reason:
+        return RemovalResult(verdict.path, folder_busy_reason)
     try:
         git.remove_worktree(verdict.main_worktree_path, verdict.path, force)
     except git.GitError as error:
-        return RemovalResult(verdict.path, error.stderr.strip() or str(error))
+        return RemovalResult(verdict.path, error.last_line)
     return RemovalResult(verdict.path)
 
 
@@ -49,5 +48,5 @@ def _prune_zombies(main_worktree_path: Path) -> str | None:
     try:
         git.prune_worktrees(main_worktree_path)
     except git.GitError as error:
-        return error.stderr.strip() or str(error)
+        return error.last_line
     return None

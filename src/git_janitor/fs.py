@@ -54,11 +54,14 @@ def is_inside_folder(path: Path, folder: Path) -> bool:
     return path.resolve().is_relative_to(folder.resolve())
 
 
-def is_in_use_by_another_program(folder: Path) -> bool:
+def check_folder_free_by_renaming(folder: Path) -> str | None:
     temporary_path = folder.with_name(f"{folder.name}.janitor-{os.getpid()}")
     try:
         folder.rename(temporary_path)
     except OSError:
-        return True
-    temporary_path.rename(folder)
-    return False
+        return "in use by another program, skipped"
+    try:
+        temporary_path.rename(folder)
+    except OSError:
+        return f"moved to {temporary_path} and could not move it back"
+    return None

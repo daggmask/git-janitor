@@ -65,6 +65,18 @@ def test_locked_worktree_is_kept_even_when_forced() -> None:
     assert verdict.reason == "worktree is locked"
 
 
+def test_locked_worktree_with_missing_folder_is_kept_not_zombie() -> None:
+    verdict = verdict_for(worktree=worktree_with(is_locked=True), folder_exists=False)
+    assert verdict.status is Status.KEEP
+    assert verdict.reason == "worktree is locked"
+
+
+def test_git_failure_keeps_it_even_when_forced() -> None:
+    verdict = verdict_for(git_failure="fatal: not a git repository", is_forced=True)
+    assert verdict.status is Status.KEEP
+    assert verdict.reason == "git failed: fatal: not a git repository"
+
+
 def test_worktree_holding_the_current_directory_is_kept() -> None:
     verdict = verdict_for(contains_current_directory=True, is_forced=True)
     assert verdict.status is Status.KEEP

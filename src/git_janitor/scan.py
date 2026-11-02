@@ -22,13 +22,14 @@ class _RepositoryInfo:
     worktrees: tuple[WorktreeEntry, ...]
     target_branches: tuple[str, ...]
     stash_branch_names: tuple[str, ...]
+    load_failure: str | None = None
 
 
 def scan_worktrees(root: Path, max_depth: int, options: ScanOptions) -> list[Verdict]:
     git_folders = fs.find_git_folders(root, max_depth)
     now = datetime.now(UTC)
     with ThreadPoolExecutor() as pool:
-        common_git_dirs = list(pool.map(git.common_git_dir, git_folders))
+        common_git_dirs = list(pool.map(_common_git_dir_or_folder, git_folders))
         one_folder_per_repository = _first_folder_per_repository(
             zip(git_folders, common_git_dirs, strict=True)
         )
@@ -50,6 +51,13 @@ def scan_worktrees(root: Path, max_depth: int, options: ScanOptions) -> list[Ver
         return [classify_worktree(facts, now, options.idle_days) for facts in all_facts]
 
 
+def _common_git_dir_or_folder(folder: Path) -> Path:
+    try:
+        return git.common_git_dir(folder)
+    except git.GitError:
+        return folder
+
+
 def _first_folder_per_repository(
     folders_with_common_git_dir: Iterable[tuple[Path, Path]],
 ) -> list[Path]:
@@ -63,12 +71,42 @@ def _first_folder_per_repository(
 
 
 def _load_repository(folder: Path, requested_targets: tuple[str, ...]) -> _RepositoryInfo:
-    worktrees = tuple(worktree for worktree in git.list_worktrees(folder) if not worktree.is_bare)
+    try:
+        worktrees = tuple(
+            worktree for worktree in git.list_worktrees(folder) if not worktree.is_bare
+        )
+    except git.GitError as error:
+        return _failed_repository((_unreadable_folder(folder),), error)
+    try:
+        return _RepositoryInfo(
+            worktrees=worktrees,
+            target_branches=_existing_target_branches(folder, requested_targets),
+            stash_branch_names=tuple(git.stash_branch_names(folder)),
+        )
+    except git.GitError as error:
+        return _failed_repository(worktrees, error)
+
+
+def _failed_repository(
+    worktrees: tuple[WorktreeEntry, ...], error: git.GitError
+) -> _RepositoryInfo:
     return _RepositoryInfo(
         worktrees=worktrees,
-        target_branches=_existing_target_branches(folder, requested_targets),
-        stash_branch_names=tuple(git.stash_branch_names(folder)),
+        target_branches=(),
+        stash_branch_names=(),
+        load_failure=_git_failure_reason(error),
     )
+
+
+def _unreadable_folder(folder: Path) -> WorktreeEntry:
+    return WorktreeEntry(
+        path=folder, main_worktree_path=folder, head_commit=None, branch=None, is_main=False
+    )
+
+
+def _git_failure_reason(error: git.GitError) -> str:
+    stderr_lines = error.stderr.strip().splitlines()
+    return stderr_lines[-1] if stderr_lines else str(error)
 
 
 def _existing_target_branches(folder: Path, requested: tuple[str, ...]) -> tuple[str, ...]:
@@ -81,9 +119,24 @@ def _existing_target_branches(folder: Path, requested: tuple[str, ...]) -> tuple
 def _gather_worktree_facts(
     worktree: WorktreeEntry, repository: _RepositoryInfo, options: ScanOptions
 ) -> WorktreeFacts:
+    if repository.load_failure:
+        return WorktreeFacts(
+            worktree=worktree, folder_exists=True, git_failure=repository.load_failure
+        )
     folder_exists = fs.folder_exists(worktree.path)
     if worktree.is_main or not folder_exists:
         return WorktreeFacts(worktree=worktree, folder_exists=folder_exists)
+    try:
+        return _read_worktree_facts(worktree, repository, options)
+    except git.GitError as error:
+        return WorktreeFacts(
+            worktree=worktree, folder_exists=True, git_failure=_git_failure_reason(error)
+        )
+
+
+def _read_worktree_facts(
+    worktree: WorktreeEntry, repository: _RepositoryInfo, options: ScanOptions
+) -> WorktreeFacts:
     path = worktree.path
     return WorktreeFacts(
         worktree=worktree,

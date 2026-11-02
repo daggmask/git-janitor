@@ -44,6 +44,7 @@ class WorktreeFacts:
     unpushed_commit_count: int = 0
     merge_checks: tuple[MergeCheck, ...] = ()
     is_forced: bool = False
+    git_failure: str | None = None
 
 
 @dataclass(frozen=True)

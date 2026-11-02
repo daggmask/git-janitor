@@ -13,6 +13,14 @@ class GitError(Exception):
         self.stderr = stderr
 
 
+TURN_OFF_FSMONITOR_AND_SIGNATURE_CHECKS = (
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "log.showSignature=false",
+)
+
+
 def _noninteractive_git_env() -> dict[str, str]:
     return {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
 
@@ -20,16 +28,19 @@ def _noninteractive_git_env() -> dict[str, str]:
 def _run_git_allowing_failure(
     args: list[str], cwd: Path, stdin: str | None = None
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        input=stdin,
-        capture_output=True,
-        encoding="utf-8",
-        errors="surrogateescape",
-        env=_noninteractive_git_env(),
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            ["git", *TURN_OFF_FSMONITOR_AND_SIGNATURE_CHECKS, *args],
+            cwd=cwd,
+            input=stdin,
+            capture_output=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            env=_noninteractive_git_env(),
+            check=False,
+        )
+    except OSError as error:
+        raise GitError(args, cwd, -1, str(error)) from error
 
 
 def _run_git(args: list[str], cwd: Path, stdin: str | None = None) -> str:
@@ -142,14 +153,24 @@ def cherry_marks(path: Path, target_branch: str) -> list[str]:
 
 
 def branch_diff_patch_id(path: Path, target_branch: str) -> str | None:
-    branch_diff = _run_git(["diff", "--no-ext-diff", "--no-color", f"{target_branch}...HEAD"], path)
+    branch_diff = _run_git(
+        ["diff", "--no-ext-diff", "--no-textconv", "--no-color", f"{target_branch}...HEAD"], path
+    )
     patch_ids = parse_patch_ids(_run_git(["patch-id", "--stable"], path, stdin=branch_diff))
     return next(iter(patch_ids), None)
 
 
 def target_commit_patch_ids(path: Path, target_branch: str) -> frozenset[str]:
     target_commits = _run_git(
-        ["log", "-p", "--no-merges", "--no-ext-diff", "--no-color", f"HEAD..{target_branch}"],
+        [
+            "log",
+            "-p",
+            "--no-merges",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            f"HEAD..{target_branch}",
+        ],
         path,
     )
     patch_ids = parse_patch_ids(_run_git(["patch-id", "--stable"], path, stdin=target_commits))

@@ -41,6 +41,35 @@ def verdicts_by_path(root: Path, options: ScanOptions = IGNORE_RECENT_USE) -> di
     }
 
 
+def command_that_leaves_marker(tmp_path: Path) -> tuple[str, Path]:
+    marker = tmp_path / "command-ran"
+    script = tmp_path / "leave_marker.py"
+    script.write_text(f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8")
+    return f'"{Path(sys.executable).as_posix()}" "{script.as_posix()}"', marker
+
+
+def commit_with_signature_block(worktree: Path) -> None:
+    tree = git(worktree, "write-tree").strip()
+    parent = git(worktree, "rev-parse", "HEAD").strip()
+    commit_lines = [
+        f"tree {tree}",
+        f"parent {parent}",
+        "author Test <test@example.com> 1700000000 +0000",
+        "committer Test <test@example.com> 1700000000 +0000",
+        "gpgsig -----BEGIN PGP SIGNATURE-----",
+        " ",
+        " abc",
+        " -----END PGP SIGNATURE-----",
+        "",
+        "signed",
+        "",
+    ]
+    commit_file_path = worktree.parent / "signed-commit.txt"
+    commit_file_path.write_bytes("\n".join(commit_lines).encode("utf-8"))
+    commit = git(worktree, "hash-object", "-t", "commit", "-w", str(commit_file_path)).strip()
+    git(worktree, "reset", "-q", "--hard", commit)
+
+
 def run_scan_command(*args: str) -> str:
     result = CliRunner().invoke(app, ["scan", *args])
     assert result.exit_code == 0, result.output
@@ -232,6 +261,87 @@ def test_scan_finds_repositories_nested_in_a_repository(tmp_path: Path) -> None:
     commit_file(inner, "README.md")
 
     assert set(verdicts_by_path(outer)) == {outer.resolve(), inner.resolve()}
+
+
+def test_broken_folder_does_not_stop_the_scan(repo_with_remote: Path) -> None:
+    fresh = add_worktree(repo_with_remote, "fresh")
+    orphan = repo_with_remote.parent / "orphan"
+    orphan.mkdir()
+    (orphan / ".git").write_text("gitdir: ../moved-away/.git\n", encoding="utf-8")
+
+    verdicts = verdicts_by_path(repo_with_remote.parent)
+
+    assert verdicts[fresh.resolve()].status is Status.SAFE
+    assert verdicts[orphan.resolve()].status is Status.KEEP
+    assert verdicts[orphan.resolve()].reason.startswith("git failed: ")
+
+
+def test_scan_does_not_run_fsmonitor_from_scanned_repo(
+    repo_with_remote: Path, tmp_path: Path
+) -> None:
+    add_worktree(repo_with_remote, "fresh")
+    command, marker = command_that_leaves_marker(tmp_path)
+    git(repo_with_remote, "config", "core.fsmonitor", command)
+
+    verdicts_by_path(repo_with_remote.parent)
+
+    assert not marker.exists()
+
+
+def test_scan_does_not_run_textconv_from_scanned_repo(
+    repo_with_remote: Path, tmp_path: Path
+) -> None:
+    branch = add_worktree(repo_with_remote, "open-pr")
+    commit_file(branch, ".gitattributes", "*.txt diff=marker\n")
+    commit_file(branch, "a.txt")
+    git(branch, "push", "-q", "origin", "open-pr")
+    command, marker = command_that_leaves_marker(tmp_path)
+    git(repo_with_remote, "config", "diff.marker.textconv", command)
+
+    verdict = verdicts_by_path(repo_with_remote.parent)[branch.resolve()]
+
+    assert verdict.reason == "2 commits not in origin/main"
+    assert not marker.exists()
+
+
+def test_scan_does_not_run_gpg_from_scanned_repo(repo_with_remote: Path, tmp_path: Path) -> None:
+    signed = add_worktree(repo_with_remote, "signed")
+    commit_with_signature_block(signed)
+    marker = tmp_path / "gpg-ran"
+    fake_gpg = tmp_path / "fake-gpg.sh"
+    fake_gpg.write_bytes(f"#!/bin/sh\ntouch '{marker.as_posix()}'\nexit 1\n".encode())
+    fake_gpg.chmod(0o755)
+    git(repo_with_remote, "config", "log.showSignature", "true")
+    git(repo_with_remote, "config", "gpg.program", fake_gpg.as_posix())
+
+    verdicts_by_path(repo_with_remote.parent)
+
+    assert not marker.exists()
+
+
+def test_missing_git_gives_keep_rows_not_a_crash(
+    repo_with_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_worktree(repo_with_remote, "fresh")
+    monkeypatch.setenv("PATH", "")
+
+    verdicts = verdicts_by_path(repo_with_remote.parent)
+
+    assert verdicts
+    assert all(verdict.status is Status.KEEP for verdict in verdicts.values())
+    assert all(verdict.reason.startswith("git failed: ") for verdict in verdicts.values())
+
+
+def test_delete_leaves_locked_worktree_with_missing_folder(repo_with_remote: Path) -> None:
+    unplugged = add_worktree(repo_with_remote, "unplugged")
+    git(repo_with_remote, "worktree", "lock", str(unplugged))
+    shutil.rmtree(unplugged)
+
+    output = run_scan_command(str(repo_with_remote.parent), "--idle-days", "0", "--delete")
+
+    assert "removed" not in output
+    assert "worktree is locked" in output
+    assert len(janitor_git.list_worktrees(repo_with_remote)) == 2
 
 
 def test_dry_run_changes_nothing(repo_with_remote: Path) -> None:

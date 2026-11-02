@@ -19,10 +19,12 @@ def _status_and_reason(facts: WorktreeFacts, now: datetime, idle_days: int) -> t
     worktree = facts.worktree
     if worktree.is_main:
         return Status.KEEP, "main working tree"
-    if not facts.folder_exists:
-        return Status.ZOMBIE, "folder is gone, prune the worktree entry"
+    if facts.git_failure:
+        return Status.KEEP, f"git failed: {facts.git_failure}"
     if worktree.is_locked:
         return Status.KEEP, "worktree is locked"
+    if not facts.folder_exists:
+        return Status.ZOMBIE, "folder is gone, prune the worktree entry"
     if facts.contains_current_directory:
         return Status.KEEP, "you are standing in it"
     if facts.is_forced:

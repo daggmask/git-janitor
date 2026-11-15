@@ -2,60 +2,41 @@
 
 ## Problemet
 
-En bugg som blev kvar från Del B: "ö" i sökvägar blir trasigt och visas som ett frågetecken i en ruta när jag kör `git janitor scan` på Windows. Mitt användarnamn är MartinHellström, så det syns ofta. I Del B skrev jag att det var git:s stderr som avkodades fel, men det hade jag aldrig kollat.
-
-Jag återskapade det först med en worktree vars huvudrepo jag flyttat, i en mapp som heter `höst`:
+En bugg som blev kvar från Del B: "ö" i sökvägar visas som ett frågetecken i en ruta när jag kör `git janitor scan` i Git Bash på Windows. I Del B skrev jag att git:s stderr avkodades fel, men det hade jag aldrig kollat. Jag återskapade det med en mapp som heter `höst` och ett huvudrepo som jag flyttat:
 
 ```text
-h�st/app-flyttad | master | keep | - | main working tree
-h�st/app-x       | app-x  | keep | - | git failed: fatal: not a git repository: C:/Users/MartinHellstr�m/...
+h�st/app-x | app-x | keep | - | git failed: fatal: not a git repository: C:/Users/MartinHellstr�m/...
 ```
 
 ## Kontexten jag gav agenten
 
-En ny agent med ren kontext, som bara fick läsa. Jag gav den:
-
-- vad som hände och var jag såg det först (Reason-kolumnen när git misslyckas)
-- när det kom: efter att git-fel började visas som en KEEP-rad i Del B
-- att `subprocess.run` kör med `encoding="utf-8", errors="surrogateescape"` och att tabellen ritas med Rich
-- miljön: Windows 10, git 2.38.1, Python 3.11, `locale.getpreferredencoding()` = cp1252, Git Bash
-- utdatan ovan
-
-Min egen teori om stderr skrev jag inte med, så att den inte skulle styra svaret.
+En ny agent som bara fick läsa. Jag skrev vad som hände, att jag först såg det i Reason-kolumnen efter att git-fel började visas som en KEEP-rad i Del B, att git körs med `encoding="utf-8", errors="surrogateescape"` och att tabellen ritas med Rich. Jag gav också miljön (Windows 10, git 2.38, Python 3.11, `locale.getpreferredencoding()` = cp1252, Git Bash) och utdatan. Min egen teori lämnade jag utanför. Sedan körde jag Steg 1-prompten ordagrant.
 
 ## Agentens hypoteser
 
-1. **stdout skrivs som cp1252 men terminalen läser UTF-8.** När stdout inte är en riktig Windows-konsol använder Python ANSI-teckentabellen. "ö" blir byten `0xF6`, som inte är giltig UTF-8. Agenten pekade på att Path-kolumnen också är trasig och den kommer inte från git, och att Rich ritar `|` i stället för `│`, vilket Rich gör när kodningen inte är UTF-8.
-2. **git skriver stderr i en annan kodning än UTF-8.** Alltså min teori från Del B.
-3. **Miljön ställer in fel kodning**, t.ex. `PYTHONIOENCODING` eller terminalens teckenuppsättning.
+1. **stdout skrivs som cp1252 men terminalen läser UTF-8.** När stdout går till en pipe och inte till en Windows-konsol väljer Python ANSI-teckentabellen, och "ö" blir byten `0xF6`. Agenten pekade på att Path-kolumnen också är trasig fast den inte kommer från git, och att Rich ritar `|` i stället för `│`. Verifiering: `sys.stdout.encoding`, råbytena i utdatan och en körning med `PYTHONUTF8=1`.
+2. **git skriver stderr i en annan kodning än UTF-8.** Då blir "ö" ett surrogattecken redan i `GitError`. Verifiering: läs git:s stderr som bytes.
+3. **Miljön ställer in fel kodning,** via `PYTHONIOENCODING` eller terminalens teckenuppsättning. Verifiering: `env` och `printf 'h\xc3\xb6st'` i terminalen.
 
 ## Vilken jag valde och varför
 
-Hypotes 1. Jag hade redan tittat på råbytena från git innan jag frågade, och där stod `f\xc3\xb6rsvunnen`, alltså korrekt UTF-8. Python fick rätt sträng. Det fällde hypotes 2. Hypotes 3 fällde jag med `env` (inget satt) och `printf 'h\xc3\xb6st'`, som visades rätt i terminalen.
+Hypotes 1, men inte för att den stod först. Jag körde verifieringen för de andra två och fällde dem. Git:s stderr innehöll `h\xc3\xb6st`, alltså korrekt UTF-8. Inga variabler var satta i Git Bash, och terminalen visade `printf`-testet rätt. Kvar blev hypotes 1.
 
-Jag gick inte på hypotes 1 för att den stod först, utan för att de andra två gick att fälla på en minut.
+I Steg 2 frågade jag vilka filer och funktioner jag skulle undersöka. Agenten pekade på callbacken `main` i `cli.py`, som är det enda som körs före alla kommandon, och listade alla ställen som skriver ut. Det gällde både Rich-tabellen och `typer.echo` till stderr. En fix bara i Rich hade alltså inte räckt.
 
 ## Vad som faktiskt var fel
 
-Hypotes 1 stämde. `sys.stdout.encoding` är `cp1252` när utdatan går genom en pipe, vilket den gör i Git Bash, i appens terminal och när man pipar vidare i PowerShell. Med `PYTHONUTF8=1` blev allt rätt, även ramarna. I ett vanligt konsolfönster syns felet inte, där skriver Python redan UTF-8.
+Hypotes 1 stämde. `sys.stdout.encoding` var `cp1252` i Git Bash. Med `PYTHONUTF8=1` blev både "ö" och ramarna rätt. Buggen har troligen funnits från början. Den syntes först i Del B, eftersom det var första gången en sökväg utanför den skannade mappen hamnade i tabellen.
 
-Fixen är att callbacken i `cli.py` byter stdout och stderr till UTF-8 innan något skrivs ut, samma kodning som git själv använder. Regressionstestet kör CLI:t som en egen process med pipad stdout och en mapp som heter `höst`. Det blev rött utan fixen. 60 tester gröna, ruff och mypy rena.
+Fixen: callbacken byter stdout och stderr till UTF-8, samma kodning som git använder. Regressionstestet kör CLI:t som en egen process med pipad stdout och mappen `höst`. Utan fixen blir det rött på Windows. På Linux och macOS är det grönt ändå. 60 tester gröna, ruff och mypy rena.
 
 ## Vad agenten fick rätt och vad den missade
 
-**Rätt:**
-- Rätt hypotes först, och den såg ledtråden i Path-kolumnen som jag själv inte hade tänkt på.
-- Alla verifieringssteg gick att köra som de stod.
-- I steg 2 listade den alla ställen som skriver ut, inklusive `typer.echo` till stderr. En fix bara i Rich hade alltså inte räckt.
+**Rätt:** rätt hypotes först, och ledtråden i Path-kolumnen, som jag inte hade sett. Alla verifieringssteg gick att köra som de stod. I Steg 2 hittade den även stderr. Hypotes 3 förklarade dessutom varför buggen bara syntes ibland: appens PowerShell har `PYTHONIOENCODING=utf-8` satt, så där såg allt rätt ut.
 
-**Missade eller fel:**
-- Den sa att PowerShell oftast avkodar med cp850 och att en UTF-8-fix bara byter en sorts trasigt mot en annan. Hos mig är PowerShell 7 inställt på UTF-8, och där var det trasigt före fixen och rätt efter.
-- Den nämnde inte att `reconfigure(encoding=...)` sätter `errors` till `strict` om man inte anger det. Ett tecken som inte går att koda hade då kraschat utskriften.
-- Den sa inget om att ett test med `CliRunner` aldrig kan hitta buggen, eftersom runnern alltid kör UTF-8. Testet måste köra en riktig process.
-- Mitt första test i appens PowerShell visade rätt tecken, eftersom `PYTHONIOENCODING=utf-8` var satt där. Hypotes 3 var alltså inte helt fel, den förklarade varför buggen bara syntes ibland.
+**Missade:**
+- `reconfigure(encoding=...)` sätter `errors` till `strict` om man inte anger det. git-text som avkodats med `surrogateescape` kan innehålla surrogattecken, och då hade utskriften kraschat. Jag satte `backslashreplace`.
+- Den sa inget om att `CliRunner` som standard kör UTF-8 och därför aldrig kan hitta buggen. Testet måste köra en riktig process.
+- Agenten varnade för att PowerShell med standardinställning avkodar pipad utdata som cp850, så där hjälper inte UTF-8. Det har den troligen rätt i. Jag kunde inte testa det, eftersom min PowerShell är omställd till UTF-8.
 
-**Fynd på vägen, inte åtgärdade:**
-- En worktree vars huvudrepo har flyttats visas på två rader.
-- `git janitor scan | head` ger en traceback när pipen stängs. Det fanns redan före fixen.
-
-Det viktigaste jag tar med mig: min egen förklaring från Del B var fel, och det var den jag hade skrivit ner som sanning. Agenten var användbar mest för att den gav tre saker att fälla i stället för en att tro på.
+Det jag tar med mig är att min förklaring från Del B var fel, och att jag hade skrivit ner den som sanning. Agenten var mest till nytta för att den gav mig tre saker att fälla i stället för en att tro på.

@@ -1,3 +1,5 @@
+import io
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -34,7 +36,13 @@ def main(
         bool, typer.Option("--version", callback=_print_version_and_exit, is_eager=True)
     ] = False,
 ) -> None:
-    pass
+    _write_utf8_like_git_even_when_piped()
+
+
+def _write_utf8_like_git_even_when_piped() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
 @app.command(help="List worktrees under ROOT and say which are safe to delete.")

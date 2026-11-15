@@ -1,4 +1,6 @@
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -467,6 +469,27 @@ def test_delete_reports_folder_that_could_not_be_renamed_back(
     assert "could not move it back" in result.output
     assert not fine.exists()
     assert not stuck.exists()
+
+
+def test_piped_output_keeps_swedish_letters(tmp_path: Path) -> None:
+    autumn = tmp_path / "höst"
+    autumn.mkdir()
+    git(autumn, "init", "-q", "-b", "main")
+    commit_file(autumn, "README.md")
+    env_without_utf8_override = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("PYTHONIOENCODING", "PYTHONUTF8")
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-c", "from git_janitor.cli import app; app()", "scan", str(tmp_path)],
+        capture_output=True,
+        env=env_without_utf8_override,
+        check=True,
+    )
+
+    assert "höst".encode() in result.stdout
 
 
 def test_cli_scan_empty_folder(tmp_path: Path) -> None:
